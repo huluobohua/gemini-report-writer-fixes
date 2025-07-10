@@ -1,0 +1,85 @@
+# Product Requirements Document: Gemini Report Writer System Fixes
+
+## Project Overview
+Fix critical deficiencies in the Gemini Report Writer system that currently generates irrelevant, incoherent reports due to systemic flaws in source retrieval, content generation, and quality control.
+
+## Problem Statement
+The current system produces fundamentally broken reports where:
+- Sources retrieved are completely unrelated to the requested topic
+- Content is generated from irrelevant sources leading to nonsensical reports
+- Citation system is broken with meaningless references
+- No quality validation exists throughout the pipeline
+
+## Goals and Objectives
+1. Fix source retrieval to return topic-relevant sources
+2. Implement content quality validation throughout the pipeline
+3. Create proper citation and reference systems
+4. Ensure generated reports are coherent and on-topic
+5. Add comprehensive quality gates to prevent broken output
+
+## Success Criteria
+- Generated reports contain only content relevant to the requested topic
+- All sources cited are actually related to the topic
+- Citations are properly formatted and meaningful
+- Research sections contain substantive, accurate content
+- System rejects generation when insufficient relevant sources exist
+
+## Technical Requirements
+
+### Phase 1: Fix Source Retrieval (Critical)
+- Implement smart query generation for search APIs
+- Add topic relevance validation before processing sources
+- Replace primitive keyword matching with LLM-based validation
+- Create focused query strategies for different topic types
+
+### Phase 2: Fix Research Workflow (Critical)
+- Implement topic-focused research methodology
+- Add research quality gates to reject irrelevant content
+- Skip sections when no relevant sources exist
+- Validate research coherence before inclusion
+
+### Phase 3: Improve Content Generation (High Priority)
+- Fix citation system to use valid source data
+- Implement content quality control in writing
+- Add coherence validation for generated content
+- Focus on quality over quantity in output
+
+### Phase 4: System-Wide Quality Assurance (Medium Priority)
+- Create validation pipeline for all content
+- Add topic coherence scoring
+- Implement source usage validation
+- Add quality gates throughout workflow
+
+### Phase 5: Workflow Optimization (Medium Priority)
+- Optimize outline generation for focused content
+- Add validation nodes to workflow graph
+- Implement conditional quality checks
+- Streamline section-by-section processing
+
+### Phase 6: Performance Improvements (Medium Priority)
+- Implement smart caching based on topic similarity
+- Optimize query generation algorithms
+- Add source deduplication logic
+- Improve error handling and recovery
+
+### Phase 7: Final Integration and Testing (Low Priority)
+- Integration testing of all components
+- End-to-end validation testing
+- Performance optimization
+- Documentation and cleanup
+
+## Constraints and Assumptions
+- Must maintain compatibility with existing LangGraph workflow
+- Should preserve multi-agent architecture
+- Must work with existing Gemini and Tavily APIs
+- Changes should be incremental and reviewable
+
+## Timeline
+Each phase should be completed as a separate PR with full review cycle:
+1. Create implementation
+2. Push to remote branch
+3. Run /reviewwithgemini for validation
+4. Iterate until approval
+5. Merge and proceed to next phase
+
+Estimated timeline: 1-2 weeks for complete implementation with review cycles.

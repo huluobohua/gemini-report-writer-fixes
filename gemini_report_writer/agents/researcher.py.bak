@@ -1,0 +1,61 @@
+
+
+from textwrap import dedent
+from utils import create_gemini_model
+
+class ResearcherAgent:
+    def __init__(self):
+        self.model = create_gemini_model(agent_role="researcher")
+
+    def conduct_research(self, outline, sources):
+        formatted_sources = []
+        for i, source in enumerate(sources):
+            title = source.get('title', 'N/A')
+            abstract = source.get('abstract', 'N/A')
+            doi = source.get('doi', 'N/A')
+            authors_list = [author for author in source.get('authors', []) if author]
+            authors = ", ".join(authors_list) if authors_list else "N.A."
+            year = source.get('year', 'N.A.')
+            formatted_sources.append(f"Source {i+1}:\nTitle: {title}\nAbstract: {abstract}\nDOI: {doi}\nAuthors: {authors}\nYear: {year}\n---")
+        sources_text = "\n".join(formatted_sources)
+        prompt = dedent(f"""
+            You are an expert researcher. Based on the following outline, please gather relevant information from academic and policy sources.
+            Prioritize information from the provided sources.
+
+            **Outline:**
+            {outline}
+
+            **Provided Sources:**
+            {sources_text}
+
+            Provide a summary of your findings, including key statistics, arguments, and citations. When citing information, try to include the author's last name and publication year if available (e.g., Smith, 2020). Ensure all claims are grounded in the provided sources. Be very explicit about which source (by title or DOI) supports which claim.
+        "")
+        return self.model.invoke(prompt).content
+
+    def refine_research(self, research_plan, critique, sources):
+        formatted_sources = []
+        for i, source in enumerate(sources):
+            title = source.get('title', 'N/A')
+            abstract = source.get('abstract', 'N/A')
+            doi = source.get('doi', 'N/A')
+            authors_list = [author for author in source.get('authors', []) if author]
+            authors = ", ".join(authors_list) if authors_list else "N.A."
+            year = source.get('year', 'N.A.')
+            formatted_sources.append(f"Source {i+1}:\nTitle: {title}\nAbstract: {abstract}\nDOI: {doi}\nAuthors: {authors}\nYear: {year}\n---")
+        sources_text = "\n".join(formatted_sources)
+        prompt = dedent(f"""
+            You are an expert researcher. You have received the following critique on your research.
+
+            **Research Plan:**
+            {research_plan}
+
+            **Critique:**
+            {critique}
+
+            **Provided Sources:**
+            {sources_text}
+
+            Please refine your research to address the critique. Find additional sources, clarify points, and ensure the research is comprehensive. When citing information, try to include the author's last name and publication year if available (e.g., Smith, 2020). Ensure all claims are grounded in the provided sources. Be very explicit about which source (by title or DOI) supports which claim.
+        "")
+        return self.model.invoke(prompt).content
+
