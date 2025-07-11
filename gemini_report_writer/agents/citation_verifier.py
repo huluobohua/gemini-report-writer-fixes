@@ -4,9 +4,10 @@ import json
 from utils import create_gemini_model
 
 class CitationVerifierAgent:
-    def __init__(self, firecrawl_api_key=None):
+    def __init__(self, firecrawl_api_key=None, unused_source_threshold=0.3):
         self.model = create_gemini_model(agent_role="citation_verifier")
         self.content_verifier = create_gemini_model(agent_role="content_verifier")
+        self.unused_source_threshold = unused_source_threshold
 
     def extract_dois(self, text):
         dois = re.findall(r'10\.\d{4,9}/[-._;()/:A-Z0-9]+', text, re.IGNORECASE)
@@ -147,7 +148,7 @@ class CitationVerifierAgent:
         # Determine if revision is needed
         citation_issues = any(flag["label"] not in ["supported", "verified"] for flag in flags)
         content_issues = not content_validation['accurate']
-        unused_source_issues = len(unused_sources) > len(cached_sources) * 0.3  # More than 30% unused
+        unused_source_issues = len(unused_sources) > len(cached_sources) * self.unused_source_threshold
         
         needs_revision = citation_issues or content_issues or unused_source_issues
         

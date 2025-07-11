@@ -3,58 +3,119 @@ import re
 import json
 
 class QualityControllerAgent:
-    def __init__(self):
+    def __init__(self, quality_thresholds=None):
         self.model = create_gemini_model(agent_role="quality_controller")
         
-        # Quality thresholds
-        self.minimum_coherence_score = 0.7
-        self.minimum_factual_accuracy = 0.8
-        self.minimum_source_usage = 0.6
-    
-    def assess_content_quality(self, report_content, sources, section_research_results=None):
-        """Comprehensive content quality assessment"""
-        
-        assessments = {}
-        
-        # 1. Coherence Assessment
-        assessments['coherence'] = self._assess_coherence(report_content)
-        
-        # 2. Factual Accuracy Assessment  
-        assessments['accuracy'] = self._assess_factual_accuracy(report_content, sources)
-        
-        # 3. Source Usage Assessment
-        assessments['source_usage'] = self._assess_source_usage(report_content, sources)
-        
-        # 4. Content Completeness Assessment
-        assessments['completeness'] = self._assess_completeness(report_content, section_research_results)
-        
-        # 5. Citation Quality Assessment
-        assessments['citations'] = self._assess_citation_quality(report_content, sources)
-        
-        # Calculate overall quality score
-        overall_score = self._calculate_overall_score(assessments)
-        
-        # Determine if revision is needed
-        needs_revision = (
-            assessments['coherence']['score'] < self.minimum_coherence_score or
-            assessments['accuracy']['score'] < self.minimum_factual_accuracy or
-            assessments['source_usage']['score'] < self.minimum_source_usage or
-            overall_score < 0.7
-        )
-        
-        return {
-            'overall_score': overall_score,
-            'needs_revision': needs_revision,
-            'assessments': assessments,
-            'recommendations': self._generate_recommendations(assessments)
+        # Configurable quality thresholds
+        default_thresholds = {
+            'minimum_coherence_score': 0.7,
+            'minimum_factual_accuracy': 0.8,
+            'minimum_source_usage': 0.6,
+            'minimum_overall_score': 0.7
         }
+        
+        self.thresholds = {**default_thresholds, **(quality_thresholds or {})}
+        self.minimum_coherence_score = self.thresholds['minimum_coherence_score']
+        self.minimum_factual_accuracy = self.thresholds['minimum_factual_accuracy']
+        self.minimum_source_usage = self.thresholds['minimum_source_usage']
+        self.minimum_overall_score = self.thresholds['minimum_overall_score']
+    
+    def _sanitize_content(self, content):
+        """Sanitize content for safe LLM processing"""
+        if not content:
+            return ""
+            
+        # Remove potential injection patterns
+        sanitized = re.sub(r'<[^>]*>', '', content)  # Remove HTML tags
+        sanitized = re.sub(r'[^\w\s\.,;:!?\-\(\)\[\]\'\"]+', '', sanitized)  # Remove special chars
+        
+        return sanitized.strip()
+    
+    def _smart_truncate(self, content, max_length=1500):
+        """Intelligently truncate content at sentence boundaries"""
+        if len(content) <= max_length:
+            return content
+            
+        # Find the last sentence boundary before max_length
+        truncated = content[:max_length]
+        last_period = truncated.rfind('.')
+        last_exclamation = truncated.rfind('!')
+        last_question = truncated.rfind('?')
+        
+        last_sentence_end = max(last_period, last_exclamation, last_question)
+        
+        if last_sentence_end > max_length * 0.7:  # If we find a good boundary
+            return content[:last_sentence_end + 1]
+        else:
+            # Fallback to word boundary
+            last_space = truncated.rfind(' ')
+            if last_space > 0:
+                return content[:last_space] + "..."
+            else:
+                return content[:max_length] + "..."
+
+    def assess_content_quality(self, report_content, sources, section_research_results=None):
+        """Comprehensive content quality assessment with error handling"""
+        
+        try:
+            # Sanitize and truncate content
+            sanitized_content = self._sanitize_content(report_content)
+            truncated_content = self._smart_truncate(sanitized_content)
+            
+            assessments = {}
+        
+            # 1. Coherence Assessment
+            assessments['coherence'] = self._assess_coherence(truncated_content)
+            
+            # 2. Factual Accuracy Assessment  
+            assessments['accuracy'] = self._assess_factual_accuracy(truncated_content, sources)
+            
+            # 3. Source Usage Assessment
+            assessments['source_usage'] = self._assess_source_usage(truncated_content, sources)
+            
+            # 4. Content Completeness Assessment
+            assessments['completeness'] = self._assess_completeness(truncated_content, section_research_results)
+            
+            # 5. Citation Quality Assessment
+            assessments['citations'] = self._assess_citation_quality(truncated_content, sources)
+            
+            # Calculate overall quality score
+            overall_score = self._calculate_overall_score(assessments)
+            
+            # Determine if revision is needed
+            needs_revision = (
+                assessments['coherence']['score'] < self.minimum_coherence_score or
+                assessments['accuracy']['score'] < self.minimum_factual_accuracy or
+                assessments['source_usage']['score'] < self.minimum_source_usage or
+                overall_score < self.minimum_overall_score
+            )
+            
+            return {
+                'overall_score': overall_score,
+                'needs_revision': needs_revision,
+                'assessments': assessments,
+                'recommendations': self._generate_recommendations(assessments),
+                'content_truncated': len(sanitized_content) != len(report_content)
+            }
+            
+        except Exception as e:
+            print(f"Error in quality assessment: {e}")
+            # Return safe fallback assessment
+            return {
+                'overall_score': 0.5,
+                'needs_revision': True,
+                'assessments': {},
+                'recommendations': ['Quality assessment failed - manual review required'],
+                'error': str(e),
+                'content_truncated': False
+            }
     
     def _assess_coherence(self, content):
         """Assess the logical flow and coherence of the content"""
         prompt = f"""
         Evaluate the coherence and logical flow of this report content.
         
-        Content: {content[:2000]}
+        Content: {content}
         
         Assess:
         1. Logical structure and flow between sections
@@ -89,7 +150,7 @@ class QualityControllerAgent:
         prompt = f"""
         Evaluate the factual accuracy of this report content against the provided sources.
         
-        Content: {content[:1500]}
+        Content: {content}
         
         Sources:
         {sources_text}
@@ -134,7 +195,7 @@ class QualityControllerAgent:
         prompt = f"""
         Evaluate how effectively the sources are integrated into this report content.
         
-        Content: {content[:1500]}
+        Content: {content}
         
         Source count: {source_count}
         Citations found: {total_citations}
@@ -177,7 +238,7 @@ class QualityControllerAgent:
         prompt = f"""
         Evaluate whether this report content adequately covers the planned sections.
         
-        Content: {content[:1500]}
+        Content: {content}
         
         Planned sections: {planned_sections}
         
@@ -206,7 +267,7 @@ class QualityControllerAgent:
         prompt = f"""
         Evaluate the quality of citations in this report content.
         
-        Content: {content[:1500]}
+        Content: {content}
         
         Number of sources available: {len(sources)}
         

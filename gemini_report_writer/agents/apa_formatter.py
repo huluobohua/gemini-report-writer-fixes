@@ -17,14 +17,16 @@ class FormattedReport(BaseModel):
     references: List[APAReference] = Field(..., description="A list of all sources cited in the report, formatted in APA style.")
 
 class APAFormatterAgent:
-    def __init__(self):
+    def __init__(self, min_year=1900, max_year=None):
         self.model = create_gemini_model(agent_role="apa_formatter")
+        self.min_year = min_year
+        self.max_year = max_year or (2030)  # Default to current year + 10
 
     def _extract_year_from_source(self, source_info):
         """Extract year from various source fields using intelligent parsing"""
         # Try direct year field first
         year = source_info.get("year")
-        if year and str(year).isdigit() and 1900 <= int(year) <= 2030:
+        if year and str(year).isdigit() and self.min_year <= int(year) <= self.max_year:
             return str(year)
             
         # Try to extract from URL
