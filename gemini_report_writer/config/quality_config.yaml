@@ -1,0 +1,111 @@
+# Quality Assurance Configuration
+# This file defines quality thresholds and settings for the report generation pipeline
+
+# Quality Thresholds (0.0 - 1.0)
+quality_thresholds:
+  outline_quality_threshold: 0.70
+  research_quality_threshold: 0.75
+  content_quality_threshold: 0.80
+  citation_quality_threshold: 0.80
+  coherence_quality_threshold: 0.75
+  overall_quality_threshold: 0.70
+
+# Quality Stage Weights (must sum to 1.0)
+stage_weights:
+  outline_quality: 0.15
+  research_quality: 0.25
+  content_quality: 0.25
+  citation_quality: 0.20
+  coherence_quality: 0.15
+
+# Pipeline Control Settings
+pipeline_settings:
+  enable_early_termination: true
+  max_revision_cycles: 3
+  failing_stages_for_termination: 2
+  enable_quality_caching: true
+  cache_ttl_minutes: 60
+
+# Performance Settings
+performance:
+  max_concurrent_assessments: 3
+  assessment_timeout_seconds: 30
+  enable_batch_processing: false
+  api_rate_limit_per_minute: 60
+
+# Quality Assessment Settings
+assessment_settings:
+  # Outline Quality
+  outline:
+    min_sections: 3
+    max_sections: 8
+    required_progression_words: ["introduction", "background", "analysis", "conclusion"]
+    topic_overlap_threshold: 0.6
+  
+  # Research Quality  
+  research:
+    min_sources: 3
+    max_skipped_sections_ratio: 0.3
+    min_content_length: 200
+    min_recent_sources_ratio: 0.4
+  
+  # Content Quality
+  content:
+    min_paragraphs: 3
+    transition_words_threshold: 0.1
+    min_word_count: 500
+    max_contradiction_score: 0.3
+  
+  # Citation Quality
+  citation:
+    min_citation_ratio: 0.5
+    max_unused_sources_ratio: 0.3
+    required_citation_formats: ["inline", "doi", "source_ref"]
+  
+  # Coherence Quality
+  coherence:
+    min_section_coverage_ratio: 0.8
+    min_narrative_flow_score: 0.7
+    max_inconsistency_score: 0.3
+
+# Scoring Configuration
+scoring:
+  # Default scores for fallback scenarios
+  default_scores:
+    outline_assessment_failure: 0.5
+    research_assessment_failure: 0.4
+    content_assessment_failure: 0.5
+    citation_assessment_failure: 0.3
+    coherence_assessment_failure: 0.5
+  
+  # Score adjustment factors
+  adjustments:
+    recent_source_bonus: 0.1
+    academic_source_bonus: 0.2
+    length_penalty_threshold: 0.1
+    complexity_bonus_threshold: 0.15
+
+# Reporting Configuration
+reporting:
+  include_detailed_metrics: true
+  include_stage_breakdown: true
+  include_recommendations: true
+  max_recommendations_per_stage: 3
+  include_quality_history: false
+  export_quality_metrics: true
+
+# Error Handling
+error_handling:
+  max_retries: 2
+  retry_delay_seconds: 1
+  fallback_to_heuristics: true
+  log_assessment_failures: true
+  continue_on_assessment_failure: true
+
+# Development/Debug Settings
+debug:
+  enable_verbose_logging: false
+  log_llm_prompts: false
+  log_quality_decisions: true
+  save_assessment_cache: false
+  validation_mode: false

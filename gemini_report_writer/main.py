@@ -12,6 +12,7 @@ from agents.apa_formatter import APAFormatterAgent, FormattedReport
 from agents.citation_verifier import CitationVerifierAgent
 from agents.grammar_gate import GrammarGateAgent
 from agents.quality_controller import QualityControllerAgent
+from agents.quality_pipeline import QualityValidationPipeline, SystemQualityReport
 
 class AgentState(TypedDict):
     topic: str
@@ -29,6 +30,7 @@ class AgentState(TypedDict):
     current_section: str # Track the current section being researched
     section_index: int # Track the index of the current section
     skipped_sections: List[Dict] # Track sections that were skipped due to quality issues
+    quality_report: SystemQualityReport # System-wide quality tracking
 
 class ReportWorkflow:
     def __init__(self):
@@ -41,6 +43,7 @@ class ReportWorkflow:
         self.citation_verifier = CitationVerifierAgent()
         self.grammar_gate = GrammarGateAgent()
         self.quality_controller = QualityControllerAgent()
+        self.quality_pipeline = QualityValidationPipeline()
 
     def run(self, topic):
         initial_state = {
@@ -59,6 +62,7 @@ class ReportWorkflow:
             "current_section": "",
             "section_index": 0,
             "skipped_sections": [],
+            "quality_report": self.quality_pipeline.start_quality_tracking(topic),
         }
 
         workflow = StateGraph(AgentState)
@@ -71,6 +75,9 @@ class ReportWorkflow:
         workflow.add_node("citation_verifier", self.verify_citations)
         workflow.add_node("critic_report", self.critique_report)
         workflow.add_node("quality_control", self.quality_control)
+        workflow.add_node("validate_outline", self.validate_outline_quality)
+        workflow.add_node("validate_research", self.validate_research_quality)
+        workflow.add_node("validate_coherence", self.validate_content_coherence)
         workflow.add_node("grammar_gate", self.check_grammar)
         workflow.add_node("human_feedback", self.get_human_feedback)
 
@@ -78,14 +85,23 @@ class ReportWorkflow:
 
         workflow.add_edge("planner", "critic_outline")
         workflow.add_conditional_edges(
-            "critic_outline", self.decide_outline, {"continue": "research_section", "revise": "planner"}
+            "critic_outline", self.decide_outline, {"continue": "validate_outline", "revise": "planner"}
+        )
+        workflow.add_conditional_edges(
+            "validate_outline", self.decide_outline_validation, {"continue": "research_section", "revise": "planner"}
         )
         workflow.add_conditional_edges(
             "research_section",
             self.decide_next_section,
-            {"continue": "research_section", "end_research": "writer"},
+            {"continue": "research_section", "end_research": "validate_research"},
         )
-        workflow.add_edge("writer", "apa_formatter")
+        workflow.add_conditional_edges(
+            "validate_research", self.decide_research_validation, {"continue": "writer", "revise": "research_section"}
+        )
+        workflow.add_edge("writer", "validate_coherence")
+        workflow.add_conditional_edges(
+            "validate_coherence", self.decide_coherence_validation, {"continue": "apa_formatter", "revise": "writer"}
+        )
         workflow.add_edge("apa_formatter", "citation_verifier")
         workflow.add_conditional_edges(
             "citation_verifier",
@@ -108,6 +124,9 @@ class ReportWorkflow:
         app = workflow.compile()
         final_state = app.invoke(initial_state, config={"recursion_limit": 200})
 
+        # Finalize quality report
+        quality_report = self.quality_pipeline.finalize_quality_report()
+        
         formatted_report_obj = final_state.get("formatted_report")
         if formatted_report_obj:
             report_text = formatted_report_obj.report_text
@@ -116,7 +135,28 @@ class ReportWorkflow:
                 for ref in formatted_report_obj.references:
                     authors = ", ".join(ref.authors)
                     references_list += f"- {authors} ({ref.year}). {ref.title}. {ref.source}\n"
-            final_report_content = report_text + references_list
+            # Add quality metrics section
+            quality_section = f"""
+
+---
+
+## Quality Assessment Report
+
+**Overall Quality Score:** {quality_report.overall_score:.2f}/1.0
+**Quality Gates Passed:** {quality_report.quality_gates_passed}/{quality_report.quality_gates_total}
+**Final Recommendation:** {quality_report.final_recommendation}
+
+### Stage Quality Breakdown:
+"""
+            for stage_report in quality_report.stage_reports:
+                quality_section += f"- **{stage_report.stage_name.replace('_', ' ').title()}:** {stage_report.overall_score:.2f} ({'✅ PASS' if stage_report.passed else '❌ FAIL'})\n"
+            
+            quality_section += f"""
+*This report was generated with comprehensive quality assurance validation.*
+*Workflow ID: {quality_report.workflow_id}*
+"""
+            
+            final_report_content = report_text + references_list + quality_section
             
             # Save the report to a Markdown file
             topic_hash = hashlib.sha256(topic.encode()).hexdigest()[:10]
@@ -389,6 +429,93 @@ This system maintains high quality standards by requiring:
             feedback = "APPROVED: Quality control error, proceeding with manual review"
             
         return {"feedback": feedback}
+
+    def validate_outline_quality(self, state: AgentState):
+        print("---VALIDATING OUTLINE QUALITY---")
+        
+        outline = state["outline"]
+        topic = state["topic"]
+        
+        validation_report = self.quality_pipeline.validate_outline_quality(outline, topic)
+        
+        # Update state with quality information
+        state["quality_report"].add_stage_report(validation_report)
+        
+        if validation_report.passed:
+            feedback = "APPROVED: Outline meets quality standards"
+        else:
+            recommendations = "; ".join(validation_report.recommendations[:2])
+            feedback = f"REVISE: {recommendations}"
+        
+        return {"feedback": feedback}
+    
+    def validate_research_quality(self, state: AgentState):
+        print("---VALIDATING RESEARCH QUALITY---")
+        
+        research_results = state["research_results"]
+        sources = state["sources"]
+        skipped_sections = state["skipped_sections"]
+        
+        validation_report = self.quality_pipeline.validate_research_quality(
+            research_results, sources, skipped_sections
+        )
+        
+        # Update state with quality information
+        state["quality_report"].add_stage_report(validation_report)
+        
+        # Check for early termination
+        if self.quality_pipeline.should_terminate_early():
+            feedback = "TERMINATE: Multiple quality gates failed - recommend stopping workflow"
+        elif validation_report.passed:
+            feedback = "APPROVED: Research meets quality standards"
+        else:
+            recommendations = "; ".join(validation_report.recommendations[:2])
+            feedback = f"REVISE: {recommendations}"
+        
+        return {"feedback": feedback}
+    
+    def validate_content_coherence(self, state: AgentState):
+        print("---VALIDATING CONTENT COHERENCE---")
+        
+        report_content = state["report"]
+        outline = state["outline"]
+        
+        validation_report = self.quality_pipeline.validate_content_coherence(report_content, outline)
+        
+        # Update state with quality information
+        state["quality_report"].add_stage_report(validation_report)
+        
+        if validation_report.passed:
+            feedback = "APPROVED: Content coherence meets standards"
+        else:
+            recommendations = "; ".join(validation_report.recommendations[:2])
+            feedback = f"REVISE: {recommendations}"
+        
+        return {"feedback": feedback}
+    
+    def decide_outline_validation(self, state: AgentState):
+        if state["outline_revisions"] > 3:
+            print("---OUTLINE VALIDATION LIMIT REACHED, PROCEEDING---")
+            return "continue"
+        if state["feedback"].startswith("APPROVED"):
+            return "continue"
+        return "revise"
+    
+    def decide_research_validation(self, state: AgentState):
+        if "TERMINATE" in state["feedback"]:
+            print("---EARLY TERMINATION TRIGGERED---")
+            return "revise"
+        if state["feedback"].startswith("APPROVED"):
+            return "continue"
+        return "revise"
+    
+    def decide_coherence_validation(self, state: AgentState):
+        if state["report_revisions"] > 3:
+            print("---COHERENCE VALIDATION LIMIT REACHED, PROCEEDING---")
+            return "continue"
+        if state["feedback"].startswith("APPROVED"):
+            return "continue"
+        return "revise"
 
     def decide_quality_control(self, state: AgentState):
         if state["report_revisions"] > 5:
