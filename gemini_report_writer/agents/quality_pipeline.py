@@ -1,5 +1,7 @@
 import json
 import time
+import os
+import yaml
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from utils import create_gemini_model
@@ -55,6 +57,7 @@ class SystemQualityReport:
         total_weighted_score = 0
         total_weight = 0
         
+        # Default stage weights (hardcoded in SystemQualityReport for independence)
         stage_weights = {
             'outline_quality': 0.15,
             'research_quality': 0.25,
@@ -87,25 +90,108 @@ class SystemQualityReport:
 class QualityValidationPipeline:
     """System-wide quality validation pipeline"""
     
-    def __init__(self, quality_config: Optional[Dict] = None):
+    def __init__(self, config_path: Optional[str] = None, quality_config: Optional[Dict] = None):
         self.model = create_gemini_model(agent_role="quality_controller")
         
-        # Default quality configuration
-        self.config = {
-            'outline_quality_threshold': 0.7,
-            'research_quality_threshold': 0.75,
-            'content_quality_threshold': 0.8,
-            'citation_quality_threshold': 0.8,
-            'coherence_quality_threshold': 0.75,
-            'overall_quality_threshold': 0.7,
-            'enable_early_termination': True,
-            'max_revision_cycles': 3
-        }
+        # Load configuration from file or use defaults
+        self.config = self._load_config(config_path, quality_config)
         
-        if quality_config:
-            self.config.update(quality_config)
+        # Validate configuration
+        self._validate_config()
         
         self.current_report: Optional[SystemQualityReport] = None
+    
+    def _load_config(self, config_path: Optional[str] = None, override_config: Optional[Dict] = None) -> Dict:
+        """Load configuration from YAML file with optional overrides"""
+        
+        # Default configuration (fallback)
+        default_config = {
+            'quality_thresholds': {
+                'outline_quality_threshold': 0.7,
+                'research_quality_threshold': 0.75,
+                'content_quality_threshold': 0.8,
+                'citation_quality_threshold': 0.8,
+                'coherence_quality_threshold': 0.75,
+                'overall_quality_threshold': 0.7
+            },
+            'pipeline_settings': {
+                'enable_early_termination': True,
+                'max_revision_cycles': 3,
+                'failing_stages_for_termination': 2
+            },
+            'stage_weights': {
+                'outline_quality': 0.15,
+                'research_quality': 0.25,
+                'content_quality': 0.25,
+                'citation_quality': 0.20,
+                'coherence_quality': 0.15
+            }
+        }
+        
+        config = default_config.copy()
+        
+        # Try to load from YAML file
+        if config_path is None:
+            # Default config file location
+            config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'quality_config.yaml')
+        
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    yaml_config = yaml.safe_load(f)
+                    if yaml_config:
+                        config.update(yaml_config)
+                print(f"✓ Quality configuration loaded from {config_path}")
+            except Exception as e:
+                print(f"⚠️  Warning: Failed to load config from {config_path}: {e}")
+                print("   Using default configuration")
+        else:
+            print(f"ℹ️  Config file not found at {config_path}, using defaults")
+        
+        # Apply any runtime overrides
+        if override_config:
+            config.update(override_config)
+        
+        return config
+    
+    def _validate_config(self):
+        """Validate configuration values are reasonable"""
+        thresholds = self.config.get('quality_thresholds', {})
+        
+        # Validate thresholds are between 0 and 1
+        for key, value in thresholds.items():
+            if not isinstance(value, (int, float)) or not (0.0 <= value <= 1.0):
+                raise ValueError(f"Quality threshold '{key}' must be between 0.0 and 1.0, got {value}")
+        
+        # Validate stage weights sum to approximately 1.0
+        weights = self.config.get('stage_weights', {})
+        if weights:
+            total_weight = sum(weights.values())
+            if not (0.95 <= total_weight <= 1.05):  # Allow small floating point variance
+                raise ValueError(f"Stage weights must sum to 1.0, got {total_weight}")
+        
+        # Validate pipeline settings
+        pipeline_settings = self.config.get('pipeline_settings', {})
+        max_cycles = pipeline_settings.get('max_revision_cycles', 3)
+        if not isinstance(max_cycles, int) or max_cycles < 1:
+            raise ValueError(f"max_revision_cycles must be a positive integer, got {max_cycles}")
+    
+    def get_threshold(self, threshold_name: str) -> float:
+        """Get a quality threshold from configuration"""
+        return self.config.get('quality_thresholds', {}).get(threshold_name, 0.7)
+    
+    def get_setting(self, setting_path: str, default=None):
+        """Get a setting value using dot notation (e.g., 'pipeline_settings.enable_early_termination')"""
+        keys = setting_path.split('.')
+        value = self.config
+        
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return default
+        
+        return value
     
     def start_quality_tracking(self, topic: str, workflow_id: str = None) -> SystemQualityReport:
         """Initialize quality tracking for a new workflow"""
@@ -126,11 +212,12 @@ class QualityValidationPipeline:
         
         # 1. Topic relevance assessment
         relevance_score = self._assess_outline_topic_relevance(outline, topic)
+        threshold = self.get_threshold('outline_quality_threshold')
         metrics.append(QualityMetric(
             name="topic_relevance",
             score=relevance_score,
-            threshold=self.config['outline_quality_threshold'],
-            passed=relevance_score >= self.config['outline_quality_threshold'],
+            threshold=threshold,
+            passed=relevance_score >= threshold,
             details={'outline_sections': len(outline)}
         ))
         
@@ -139,8 +226,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="structural_coherence", 
             score=coherence_score,
-            threshold=self.config['outline_quality_threshold'],
-            passed=coherence_score >= self.config['outline_quality_threshold'],
+            threshold=threshold,
+            passed=coherence_score >= threshold,
             details={'logical_flow': coherence_score > 0.8}
         ))
         
@@ -149,8 +236,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="completeness",
             score=completeness_score,
-            threshold=self.config['outline_quality_threshold'],
-            passed=completeness_score >= self.config['outline_quality_threshold'],
+            threshold=threshold,
+            passed=completeness_score >= threshold,
             details={'coverage_areas': self._identify_coverage_areas(outline)}
         ))
         
@@ -160,11 +247,11 @@ class QualityValidationPipeline:
         
         recommendations = []
         if not stage_passed:
-            if relevance_score < self.config['outline_quality_threshold']:
+            if relevance_score < threshold:
                 recommendations.append("Improve topic alignment of outline sections")
-            if coherence_score < self.config['outline_quality_threshold']:
+            if coherence_score < threshold:
                 recommendations.append("Enhance logical flow between sections")
-            if completeness_score < self.config['outline_quality_threshold']:
+            if completeness_score < threshold:
                 recommendations.append("Add missing key topic areas to outline")
         
         report = StageQualityReport(
@@ -184,14 +271,15 @@ class QualityValidationPipeline:
     def validate_research_quality(self, research_results: Dict, sources: List, skipped_sections: List) -> StageQualityReport:
         """Validate research quality across all sections"""
         metrics = []
+        threshold = self.get_threshold('research_quality_threshold')
         
         # 1. Source quality assessment
         source_quality_score = self._assess_source_quality(sources)
         metrics.append(QualityMetric(
             name="source_quality",
             score=source_quality_score,
-            threshold=self.config['research_quality_threshold'],
-            passed=source_quality_score >= self.config['research_quality_threshold'],
+            threshold=threshold,
+            passed=source_quality_score >= threshold,
             details={'source_count': len(sources), 'quality_sources': sum(1 for s in sources if s.get('relevance_score', 0) > 0.7)}
         ))
         
@@ -200,8 +288,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="research_completeness",
             score=completeness_score, 
-            threshold=self.config['research_quality_threshold'],
-            passed=completeness_score >= self.config['research_quality_threshold'],
+            threshold=threshold,
+            passed=completeness_score >= threshold,
             details={'completed_sections': len(research_results), 'skipped_sections': len(skipped_sections)}
         ))
         
@@ -210,8 +298,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="content_depth",
             score=depth_score,
-            threshold=self.config['research_quality_threshold'], 
-            passed=depth_score >= self.config['research_quality_threshold'],
+            threshold=threshold, 
+            passed=depth_score >= threshold,
             details={'average_content_length': self._calculate_avg_content_length(research_results)}
         ))
         
@@ -220,11 +308,11 @@ class QualityValidationPipeline:
         
         recommendations = []
         if not stage_passed:
-            if source_quality_score < self.config['research_quality_threshold']:
+            if source_quality_score < threshold:
                 recommendations.append("Improve source quality and relevance")
-            if completeness_score < self.config['research_quality_threshold']:
+            if completeness_score < threshold:
                 recommendations.append("Reduce skipped sections by finding better sources")
-            if depth_score < self.config['research_quality_threshold']:
+            if depth_score < threshold:
                 recommendations.append("Conduct more thorough research with deeper analysis")
         
         report = StageQualityReport(
@@ -244,14 +332,15 @@ class QualityValidationPipeline:
     def validate_content_coherence(self, report_content: str, outline: List[str]) -> StageQualityReport:
         """Validate overall content coherence and flow"""
         metrics = []
+        threshold = self.get_threshold('coherence_quality_threshold')
         
         # 1. Outline-content alignment
         alignment_score = self._assess_content_outline_alignment(report_content, outline)
         metrics.append(QualityMetric(
             name="outline_alignment",
             score=alignment_score,
-            threshold=self.config['coherence_quality_threshold'],
-            passed=alignment_score >= self.config['coherence_quality_threshold'],
+            threshold=threshold,
+            passed=alignment_score >= threshold,
             details={'section_coverage': self._analyze_section_coverage(report_content, outline)}
         ))
         
@@ -260,8 +349,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="narrative_flow",
             score=flow_score,
-            threshold=self.config['coherence_quality_threshold'],
-            passed=flow_score >= self.config['coherence_quality_threshold'],
+            threshold=threshold,
+            passed=flow_score >= threshold,
             details={'transition_quality': flow_score > 0.8}
         ))
         
@@ -270,8 +359,8 @@ class QualityValidationPipeline:
         metrics.append(QualityMetric(
             name="argument_consistency",
             score=consistency_score,
-            threshold=self.config['coherence_quality_threshold'],
-            passed=consistency_score >= self.config['coherence_quality_threshold'],
+            threshold=threshold,
+            passed=consistency_score >= threshold,
             details={'contradictions_found': consistency_score < 0.7}
         ))
         
@@ -280,11 +369,11 @@ class QualityValidationPipeline:
         
         recommendations = []
         if not stage_passed:
-            if alignment_score < self.config['coherence_quality_threshold']:
+            if alignment_score < threshold:
                 recommendations.append("Better align content with planned outline structure")
-            if flow_score < self.config['coherence_quality_threshold']:
+            if flow_score < threshold:
                 recommendations.append("Improve transitions and narrative flow between sections")
-            if consistency_score < self.config['coherence_quality_threshold']:
+            if consistency_score < threshold:
                 recommendations.append("Resolve contradictions and ensure argument consistency")
         
         report = StageQualityReport(
@@ -318,13 +407,14 @@ class QualityValidationPipeline:
     
     def should_terminate_early(self) -> bool:
         """Determine if workflow should terminate early due to quality issues"""
-        if not self.config['enable_early_termination'] or not self.current_report:
+        if not self.get_setting('pipeline_settings.enable_early_termination', True) or not self.current_report:
             return False
             
         # Check if we have multiple failing stages
         failing_stages = [r for r in self.current_report.stage_reports if not r.passed]
+        failing_threshold = self.get_setting('pipeline_settings.failing_stages_for_termination', 2)
         
-        if len(failing_stages) >= 2:
+        if len(failing_stages) >= failing_threshold:
             print(f"⚠️  Early termination recommended: {len(failing_stages)} quality gates failed")
             return True
             
