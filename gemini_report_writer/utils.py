@@ -12,6 +12,9 @@ AGENT_MODEL_MAPPING = {
     "writer": "gemini-2.5-flash-lite-preview-06-17",
     "citation_verifier": "gemini-2.5-flash-lite-preview-06-17",
     "retriever": "gemini-2.5-flash",
+    "apa_formatter": "gemini-2.5-flash-lite-preview-06-17",
+    "content_verifier": "gemini-2.5-flash",
+    "quality_controller": "gemini-2.5-flash",
 }
 
 def create_gemini_model(agent_role: str, temperature: float = 0):

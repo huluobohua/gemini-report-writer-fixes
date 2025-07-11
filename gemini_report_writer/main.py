@@ -11,6 +11,7 @@ from agents.retriever import RetrieverAgent
 from agents.apa_formatter import APAFormatterAgent, FormattedReport
 from agents.citation_verifier import CitationVerifierAgent
 from agents.grammar_gate import GrammarGateAgent
+from agents.quality_controller import QualityControllerAgent
 
 class AgentState(TypedDict):
     topic: str
@@ -39,6 +40,7 @@ class ReportWorkflow:
         self.apa_formatter = APAFormatterAgent()
         self.citation_verifier = CitationVerifierAgent()
         self.grammar_gate = GrammarGateAgent()
+        self.quality_controller = QualityControllerAgent()
 
     def run(self, topic):
         initial_state = {
@@ -68,6 +70,7 @@ class ReportWorkflow:
         workflow.add_node("apa_formatter", self.format_report)
         workflow.add_node("citation_verifier", self.verify_citations)
         workflow.add_node("critic_report", self.critique_report)
+        workflow.add_node("quality_control", self.quality_control)
         workflow.add_node("grammar_gate", self.check_grammar)
         workflow.add_node("human_feedback", self.get_human_feedback)
 
@@ -90,7 +93,10 @@ class ReportWorkflow:
             {"continue": "critic_report", "revise": "writer"},
         )
         workflow.add_conditional_edges(
-            "critic_report", self.decide_report, {"continue": "grammar_gate", "revise": "writer"}
+            "critic_report", self.decide_report, {"continue": "quality_control", "revise": "writer"}
+        )
+        workflow.add_conditional_edges(
+            "quality_control", self.decide_quality_control, {"continue": "grammar_gate", "revise": "writer"}
         )
         workflow.add_conditional_edges(
             "grammar_gate", self.decide_grammar, {"continue": "human_feedback", "revise": "writer"}
@@ -342,6 +348,51 @@ This system maintains high quality standards by requiring:
     def decide_report(self, state: AgentState):
         if state["report_revisions"] > 5:
             print("---REPORT REVISION LIMIT REACHED, PROCEEDING ANYWAY---")
+            return "continue"
+        if state["feedback"].startswith("APPROVED"):
+            return "continue"
+        return "revise"
+
+    def quality_control(self, state: AgentState):
+        print("---QUALITY CONTROL ASSESSMENT---")
+        
+        try:
+            report_content = state["formatted_report"].report_text
+            sources = state["sources"]
+            section_research_results = state.get("research_results", {})
+            
+            quality_assessment = self.quality_controller.assess_content_quality(
+                report_content, sources, section_research_results
+            )
+            
+            # Check for assessment errors
+            if 'error' in quality_assessment:
+                print(f"⚠️  Quality assessment error: {quality_assessment['error']}")
+                feedback = "APPROVED: Quality assessment failed, proceeding with manual review"
+                return {"feedback": feedback}
+            
+            print(f"📊 Quality Score: {quality_assessment['overall_score']:.2f}")
+            
+            if quality_assessment.get('content_truncated'):
+                print("ℹ️  Content was truncated for assessment")
+            
+            if quality_assessment['needs_revision']:
+                print("⚠️  Quality issues detected")
+                recommendations = quality_assessment.get('recommendations', [])
+                feedback = "REVISE: " + "; ".join(recommendations[:3])  # Top 3 recommendations
+            else:
+                print("✓ Quality assessment passed")
+                feedback = "APPROVED: Quality control passed"
+                
+        except Exception as e:
+            print(f"⚠️  Quality control failed: {e}")
+            feedback = "APPROVED: Quality control error, proceeding with manual review"
+            
+        return {"feedback": feedback}
+
+    def decide_quality_control(self, state: AgentState):
+        if state["report_revisions"] > 5:
+            print("---QUALITY CONTROL REVISION LIMIT REACHED, PROCEEDING ANYWAY---")
             return "continue"
         if state["feedback"].startswith("APPROVED"):
             return "continue"

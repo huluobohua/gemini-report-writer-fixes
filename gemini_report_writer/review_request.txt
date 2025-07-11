@@ -1,0 +1,150 @@
+# Gemini Review Request
+
+## Context
+Reviewing the second critical fix for the Gemini Report Writer system. The previous review identified several issues:
+
+1. **Grammar Gate Integration**: Missing conditional edge from grammar_gate to decide_grammar
+2. **Complete Report Failure Handling**: Missing handling when all sections are skipped
+3. **Quality Configuration**: Hardcoded thresholds instead of configurable parameters
+4. **Error Messages**: Static error messages without dynamic threshold values
+
+## Key Changes Made
+
+### 1. Fixed Grammar Gate Integration
+- Added conditional edges from grammar_gate to decide_grammar in main.py
+- Grammar feedback is now properly processed through the workflow
+
+### 2. Complete Report Failure Handling
+- Added detection when all sections are skipped (completed_sections == 0)
+- Generate meaningful failure report with recommendations
+- Include dynamic threshold values in error messages
+
+### 3. Externalized Quality Configuration
+- Made quality thresholds configurable via constructor parameter
+- Removed hardcoded values from researcher.py
+- Added quality_config parameter to ResearcherAgent.__init__()
+
+### 4. Enhanced Error Messages
+- Dynamic threshold values in error messages
+- Clear explanations of quality standards
+- Specific recommendations for users
+
+## Files Changed
+1. **main.py**: Grammar gate fix, complete failure handling, quality stats logging
+2. **researcher.py**: Externalized configuration, enhanced validation, quality metrics
+3. **writer.py**: Quality-aware report generation, skipped section handling
+
+## Question
+Do these fixes address all the concerns identified in the previous review? Are there any remaining issues or improvements needed before this PR can be approved and merged?
+
+## Code to Review
+
+### Key Method: validate_research_feasibility
+```python
+def validate_research_feasibility(self, section_title, sources, main_topic):
+    """Check if research can be conducted with given sources for the section"""
+    if not sources:
+        return {
+            'feasible': False,
+            'reason': 'No sources available',
+            'recommendation': 'skip_section'
+        }
+    
+    # Check minimum source count
+    if len(sources) < self.minimum_sources_threshold:
+        return {
+            'feasible': False,
+            'reason': f'Insufficient sources: {len(sources)} < {self.minimum_sources_threshold}',
+            'recommendation': 'skip_section'
+        }
+    
+    # Check source relevance quality
+    relevance_scores = [s.get('topic_relevance', 0.0) for s in sources]
+    avg_relevance = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.0
+    
+    if avg_relevance < self.minimum_relevance_threshold:
+        return {
+            'feasible': False,
+            'reason': f'Low source relevance: {avg_relevance:.2f} < {self.minimum_relevance_threshold}',
+            'recommendation': 'skip_section'
+        }
+    
+    # Additional topic-section coherence check
+    section_relevance = self._assess_section_topic_alignment(section_title, main_topic, sources)
+    
+    if section_relevance < self.section_alignment_threshold:
+        return {
+            'feasible': False,
+            'reason': f'Section-topic misalignment: {section_relevance:.2f} < {self.section_alignment_threshold}',
+            'recommendation': 'skip_section'
+        }
+    
+    return {
+        'feasible': True,
+        'quality_score': avg_relevance,
+        'source_count': len(sources),
+        'section_relevance': section_relevance
+    }
+```
+
+### Key Method: Complete Report Failure Handling
+```python
+if completed_sections == 0 and total_sections > 0:
+    # No sections could be researched - create a minimal report explaining the situation
+    print("⚠️  WARNING: No sections could be researched due to insufficient quality sources!")
+    report = f"""# Report Generation Failed: Insufficient Quality Sources
+
+## Summary
+This report could not be generated for the topic "{state['topic']}" due to insufficient high-quality, relevant sources for all planned sections.
+
+## Attempted Sections
+{total_sections} sections were planned but all {skipped_count} were skipped:
+
+""" + "\\n".join([f"- **{s['section']}**: {s['reason']}" for s in skipped_sections]) + f"""
+
+## Recommendations
+1. **Refine the topic**: The topic may be too narrow, specialized, or lack recent research
+2. **Check spelling**: Ensure the topic is spelled correctly and uses standard terminology
+3. **Broaden scope**: Consider expanding the topic to include related areas
+4. **Check source availability**: Verify that academic sources exist for this topic
+
+## Research Quality Standards
+This system maintains high quality standards by requiring:
+- Minimum {self.researcher.minimum_sources_threshold} relevant sources per section
+- Minimum {self.researcher.minimum_relevance_threshold:.1f} average relevance score
+- Minimum {self.researcher.section_alignment_threshold:.1f} section-topic alignment
+
+*This quality-first approach prevents the generation of inaccurate or irrelevant content.*
+"""
+    return {"report": report, "report_revisions": report_revisions + 1}
+```
+
+### Key Method: Grammar Gate Fix
+```python
+# Before (missing conditional edge)
+workflow.add_edge("grammar_gate", "human_feedback")
+
+# After (fixed with conditional edge)
+workflow.add_conditional_edges(
+    "grammar_gate", self.decide_grammar, {"continue": "human_feedback", "revise": "writer"}
+)
+```
+
+### Configuration Externalization
+```python
+# Before (hardcoded values)
+class ResearcherAgent:
+    def __init__(self):
+        self.model = create_gemini_model(agent_role="researcher")
+
+# After (configurable parameters)
+class ResearcherAgent:
+    def __init__(self, quality_config=None):
+        self.model = create_gemini_model(agent_role="researcher")
+        
+        # Quality thresholds for research validation (externalized)
+        config = quality_config or {}
+        self.minimum_sources_threshold = config.get('minimum_sources', 3)
+        self.minimum_relevance_threshold = config.get('minimum_relevance', 0.5)
+        self.section_alignment_threshold = config.get('section_alignment', 0.6)
+```
