@@ -27,6 +27,7 @@ class AgentState(TypedDict):
     citation_revisions: int
     current_section: str # Track the current section being researched
     section_index: int # Track the index of the current section
+    skipped_sections: List[Dict] # Track sections that were skipped due to quality issues
 
 class ReportWorkflow:
     def __init__(self):
@@ -55,6 +56,7 @@ class ReportWorkflow:
             "citation_revisions": 0,
             "current_section": "",
             "section_index": 0,
+            "skipped_sections": [],
         }
 
         workflow = StateGraph(AgentState)
@@ -90,7 +92,9 @@ class ReportWorkflow:
         workflow.add_conditional_edges(
             "critic_report", self.decide_report, {"continue": "grammar_gate", "revise": "writer"}
         )
-        workflow.add_edge("grammar_gate", "human_feedback")
+        workflow.add_conditional_edges(
+            "grammar_gate", self.decide_grammar, {"continue": "human_feedback", "revise": "writer"}
+        )
         workflow.add_conditional_edges(
             "human_feedback", self.decide_human_feedback, {"continue": END, "revise": "writer"}
         )
@@ -150,19 +154,69 @@ class ReportWorkflow:
     def research_section(self, state: AgentState):
         section_index = state.get("section_index", 0)
         current_section = state["outline"][section_index]
+        main_topic = state["topic"]
         print(f"---RESEARCHING SECTION: {current_section}---")
         
         # Retrieve sources for the current section
-        sources = self.retriever.retrieve(f"{state['topic']}: {current_section}")
+        sources = self.retriever.retrieve(f"{main_topic}: {current_section}")
         
-        # Conduct research for the current section
-        research_for_section = self.researcher.conduct_research(current_section, sources)
+        # Validate research feasibility before proceeding
+        validation = self.researcher.validate_research_feasibility(current_section, sources, main_topic)
+        
+        if not validation['feasible']:
+            print(f"⚠️  SKIPPING SECTION: {validation['reason']}")
+            print(f"   Recommendation: {validation['recommendation']}")
+            
+            # Track skipped sections
+            skipped_sections = state.get("skipped_sections", [])
+            skipped_sections.append({
+                'section': current_section,
+                'reason': validation['reason'],
+                'recommendation': validation['recommendation']
+            })
+            
+            return {
+                "research_results": state.get("research_results", {}),
+                "sources": state.get("sources", []),
+                "section_index": section_index + 1,
+                "current_section": current_section,
+                "skipped_sections": skipped_sections
+            }
+        
+        print(f"✓ Research feasible: {validation.get('source_count', 0)} sources, avg relevance: {validation.get('quality_score', 0):.2f}")
+        
+        # Conduct research for the current section with topic context
+        research_result = self.researcher.conduct_research(current_section, sources, main_topic)
         
         # Update the research results
         current_results = state.get("research_results", {})
-        current_results[current_section] = research_for_section
         
-        # Update all sources gathered so far
+        if research_result.get('skipped'):
+            print(f"⚠️  RESEARCH DECLINED: {research_result['reason']}")
+            skipped_sections = state.get("skipped_sections", [])
+            skipped_sections.append({
+                'section': current_section,
+                'reason': research_result['reason'],
+                'recommendation': research_result.get('recommendation', 'skip_section')
+            })
+            
+            return {
+                "research_results": current_results,
+                "sources": state.get("sources", []),
+                "section_index": section_index + 1,
+                "current_section": current_section,
+                "skipped_sections": skipped_sections
+            }
+        else:
+            # Store successful research with quality metrics
+            current_results[current_section] = {
+                'content': research_result['content'],
+                'quality_metrics': research_result.get('quality_metrics', {}),
+                'source_count': research_result.get('source_count', 0)
+            }
+            print(f"✓ Research completed: {research_result.get('source_count', 0)} sources used")
+        
+        # Update all sources gathered so far (only from successful research)
         all_sources = state.get("sources", [])
         all_sources.extend(sources)
         # Remove duplicates
@@ -181,7 +235,8 @@ class ReportWorkflow:
             "research_results": current_results,
             "sources": unique_sources,
             "section_index": section_index + 1,
-            "current_section": current_section
+            "current_section": current_section,
+            "skipped_sections": state.get("skipped_sections", [])
         }
 
     def decide_next_section(self, state: AgentState):
@@ -192,11 +247,70 @@ class ReportWorkflow:
     def write(self, state: AgentState):
         print("---WRITING---")
         report_revisions = state.get("report_revisions", 0)
+        
+        # Process research results to extract content and add quality context
+        processed_research = {}
+        quality_summary = {}
+        
+        for section, research_data in state["research_results"].items():
+            if isinstance(research_data, dict) and 'content' in research_data:
+                # New format with quality metrics
+                processed_research[section] = research_data['content']
+                quality_summary[section] = research_data.get('quality_metrics', {})
+            else:
+                # Old format - just content string
+                processed_research[section] = research_data
+                quality_summary[section] = {}
+        
+        # Check for completely empty report scenario
+        total_sections = len(state.get("outline", []))
+        completed_sections = len(processed_research)
+        skipped_sections = state.get("skipped_sections", [])
+        skipped_count = len(skipped_sections)
+        
+        if completed_sections == 0 and total_sections > 0:
+            # No sections could be researched - create a minimal report explaining the situation
+            print("⚠️  WARNING: No sections could be researched due to insufficient quality sources!")
+            report = f"""# Report Generation Failed: Insufficient Quality Sources
+
+## Summary
+This report could not be generated for the topic "{state['topic']}" due to insufficient high-quality, relevant sources for all planned sections.
+
+## Attempted Sections
+{total_sections} sections were planned but all {skipped_count} were skipped:
+
+""" + "\\n".join([f"- **{s['section']}**: {s['reason']}" for s in skipped_sections]) + f"""
+
+## Recommendations
+1. **Refine the topic**: The topic may be too narrow, specialized, or lack recent research
+2. **Check spelling**: Ensure the topic is spelled correctly and uses standard terminology
+3. **Broaden scope**: Consider expanding the topic to include related areas
+4. **Check source availability**: Verify that academic sources exist for this topic
+
+## Research Quality Standards
+This system maintains high quality standards by requiring:
+- Minimum {self.researcher.minimum_sources_threshold} relevant sources per section
+- Minimum {self.researcher.minimum_relevance_threshold:.1f} average relevance score
+- Minimum {self.researcher.section_alignment_threshold:.1f} section-topic alignment
+
+*This quality-first approach prevents the generation of inaccurate or irrelevant content.*
+"""
+            return {"report": report, "report_revisions": report_revisions + 1}
+        
+        # Include information about skipped sections
+        skipped_info = ""
+        if skipped_sections:
+            skipped_info = f"\\n\\n**Research Quality Note:** {len(skipped_sections)} sections were skipped due to insufficient or irrelevant sources: {[s['section'] for s in skipped_sections]}"
+        
         if state.get("feedback"):
             report = self.writer.refine_report(state["report"], state["feedback"], state["sources"])
         else:
-            # The writer now receives section-specific research
-            report = self.writer.write_report(state["research_results"], state["sources"])
+            # Pass processed research with quality context
+            report = self.writer.write_report(processed_research, state["sources"], quality_summary, skipped_info)
+        
+        # Log writing statistics
+        print(f"📊 Writing Stats: {completed_sections}/{total_sections} sections completed, {skipped_count} skipped")
+        
         return {"report": report, "report_revisions": report_revisions + 1}
 
     def format_report(self, state: AgentState):
