@@ -2,12 +2,14 @@ from textwrap import dedent
 from utils import create_gemini_model
 
 class ResearcherAgent:
-    def __init__(self):
+    def __init__(self, quality_config=None):
         self.model = create_gemini_model(agent_role="researcher")
         
-        # Quality thresholds for research validation
-        self.minimum_sources_threshold = 3  # Minimum sources needed for research
-        self.minimum_relevance_threshold = 0.5  # Minimum average relevance needed
+        # Quality thresholds for research validation (externalized)
+        config = quality_config or {}
+        self.minimum_sources_threshold = config.get('minimum_sources', 3)  # Minimum sources needed for research
+        self.minimum_relevance_threshold = config.get('minimum_relevance', 0.5)  # Minimum average relevance needed
+        self.section_alignment_threshold = config.get('section_alignment', 0.6)  # Minimum section-topic alignment
 
     def validate_research_feasibility(self, section_title, sources, main_topic):
         """Check if research can be conducted with given sources for the section"""
@@ -40,10 +42,10 @@ class ResearcherAgent:
         # Additional topic-section coherence check
         section_relevance = self._assess_section_topic_alignment(section_title, main_topic, sources)
         
-        if section_relevance < 0.6:
+        if section_relevance < self.section_alignment_threshold:
             return {
                 'feasible': False,
-                'reason': f'Section-topic misalignment: {section_relevance:.2f} < 0.6',
+                'reason': f'Section-topic misalignment: {section_relevance:.2f} < {self.section_alignment_threshold}',
                 'recommendation': 'skip_section'
             }
         

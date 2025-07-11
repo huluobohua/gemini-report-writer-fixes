@@ -92,7 +92,9 @@ class ReportWorkflow:
         workflow.add_conditional_edges(
             "critic_report", self.decide_report, {"continue": "grammar_gate", "revise": "writer"}
         )
-        workflow.add_edge("grammar_gate", "human_feedback")
+        workflow.add_conditional_edges(
+            "grammar_gate", self.decide_grammar, {"continue": "human_feedback", "revise": "writer"}
+        )
         workflow.add_conditional_edges(
             "human_feedback", self.decide_human_feedback, {"continue": END, "revise": "writer"}
         )
@@ -260,9 +262,43 @@ class ReportWorkflow:
                 processed_research[section] = research_data
                 quality_summary[section] = {}
         
+        # Check for completely empty report scenario
+        total_sections = len(state.get("outline", []))
+        completed_sections = len(processed_research)
+        skipped_sections = state.get("skipped_sections", [])
+        skipped_count = len(skipped_sections)
+        
+        if completed_sections == 0 and total_sections > 0:
+            # No sections could be researched - create a minimal report explaining the situation
+            print("⚠️  WARNING: No sections could be researched due to insufficient quality sources!")
+            report = f"""# Report Generation Failed: Insufficient Quality Sources
+
+## Summary
+This report could not be generated for the topic "{state['topic']}" due to insufficient high-quality, relevant sources for all planned sections.
+
+## Attempted Sections
+{total_sections} sections were planned but all {skipped_count} were skipped:
+
+""" + "\\n".join([f"- **{s['section']}**: {s['reason']}" for s in skipped_sections]) + f"""
+
+## Recommendations
+1. **Refine the topic**: The topic may be too narrow, specialized, or lack recent research
+2. **Check spelling**: Ensure the topic is spelled correctly and uses standard terminology
+3. **Broaden scope**: Consider expanding the topic to include related areas
+4. **Check source availability**: Verify that academic sources exist for this topic
+
+## Research Quality Standards
+This system maintains high quality standards by requiring:
+- Minimum {self.researcher.minimum_sources_threshold} relevant sources per section
+- Minimum {self.researcher.minimum_relevance_threshold:.1f} average relevance score
+- Minimum {self.researcher.section_alignment_threshold:.1f} section-topic alignment
+
+*This quality-first approach prevents the generation of inaccurate or irrelevant content.*
+"""
+            return {"report": report, "report_revisions": report_revisions + 1}
+        
         # Include information about skipped sections
         skipped_info = ""
-        skipped_sections = state.get("skipped_sections", [])
         if skipped_sections:
             skipped_info = f"\\n\\n**Research Quality Note:** {len(skipped_sections)} sections were skipped due to insufficient or irrelevant sources: {[s['section'] for s in skipped_sections]}"
         
@@ -273,9 +309,6 @@ class ReportWorkflow:
             report = self.writer.write_report(processed_research, state["sources"], quality_summary, skipped_info)
         
         # Log writing statistics
-        total_sections = len(state.get("outline", []))
-        completed_sections = len(processed_research)
-        skipped_count = len(skipped_sections)
         print(f"📊 Writing Stats: {completed_sections}/{total_sections} sections completed, {skipped_count} skipped")
         
         return {"report": report, "report_revisions": report_revisions + 1}
